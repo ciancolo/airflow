@@ -68,7 +68,8 @@ class SqoopHook(BaseHook):
         hcatalog_database: Optional[str] = None,
         hcatalog_table: Optional[str] = None,
         properties: Optional[Dict[str, Any]] = None,
-        conn_metastore_id: Optional[str] = None
+        conn_metastore_id: Optional[str] = None,
+        metastore_table_name: Optional[str] = None
     ) -> None:
         # No mutable types in the default parameters
         super().__init__()
@@ -93,8 +94,8 @@ class SqoopHook(BaseHook):
             connection_url = self.create_connection_metastore()
             self.engine = create_engine(connection_url, echo=False)
             self.metadata = MetaData(self.engine)
-
             self.session_maker = sessionmaker(bind=self.engine)
+            self.metastore_table = Table(metastore_table_name, self.metadata, autoload=True)
 
     def get_conn(self) -> Any:
         return self.conn
@@ -452,3 +453,6 @@ class SqoopHook(BaseHook):
 
     def get_engine(self):
         return self.engine
+
+    def get_metastore_table(self):
+        return self.metastore_table

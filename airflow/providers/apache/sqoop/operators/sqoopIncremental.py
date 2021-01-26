@@ -86,7 +86,7 @@ class SqoopOperatorIncremental(SqoopOperator):
         If a key doesn't have a value, just pass an empty string to it.
         Don't include prefix of -- for sqoop options.
     :param conn_metastore_id: str
-    :param metastore_table: str
+    :param metastore_table_name: str
     """
 
     template_fields = (
@@ -115,7 +115,7 @@ class SqoopOperatorIncremental(SqoopOperator):
         'hcatalog_database',
         'hcatalog_table',
         'conn_metastore_id',
-        'metastore_table',
+        'metastore_table_name',
     )
     ui_color = '#7D8CA4'
 
@@ -157,7 +157,7 @@ class SqoopOperatorIncremental(SqoopOperator):
         extra_import_options: Optional[Dict[str, Any]] = None,
         extra_export_options: Optional[Dict[str, Any]] = None,
         conn_metastore_id: Optional[str] = None,
-        metastore_table: Optional[str] = None,
+        metastore_table_name: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -195,13 +195,15 @@ class SqoopOperatorIncremental(SqoopOperator):
         self.extra_export_options = extra_export_options or {}
         self.hook: Optional[SqoopHook] = None
         self.conn_metastore_id = conn_metastore_id
-        self.metastore_table = metastore_table
+        self.metastore_table_name = metastore_table_name
 
     def execute(self, context: Dict[str, Any]) -> None:
         if self.hook is None:
             self.hook = self._get_hook()
 
-        if 'check-column' in self.extra_import_options.keys() and 'incremental' in self.extra_import_options.keys():
+        if self.conn_metastore_id and \
+            'check-column' in self.extra_import_options.keys() and \
+            'incremental' in self.extra_import_options.keys():
             if 'column-type' not in self.extra_import_options.keys():
                 raise AirflowException('column-type properties needed for incremental Sqoop')
             self.log.info('Gather last-value for %s.%s and column %s from SqoopMetastore' %
@@ -209,6 +211,7 @@ class SqoopOperatorIncremental(SqoopOperator):
                            self.extra_import_options['check-column']))
             last_value = self.__read_last_value(context)
             self.extra_import_options['last-value'] = last_value
+            self.extra_import_options.pop('column-type')
 
         if self.cmd_type == 'export':
             self.hook.export_table(
@@ -266,7 +269,9 @@ class SqoopOperatorIncremental(SqoopOperator):
         else:
             raise AirflowException("cmd_type should be 'import' or 'export'")
 
-        if 'check-column' in self.extra_import_options.keys() and 'incremental' in self.extra_import_options.keys():
+        if self.conn_metastore_id and \
+            'check-column' in self.extra_import_options.keys() and \
+            'incremental' in self.extra_import_options.keys():
             self.log.info('Update last-value for %s.%s and column %s from SqoopMetastore' %
                           (context['dag'].dag_id, context['task_instance'].task_id,
                            self.extra_import_options['check-column']))
@@ -275,7 +280,7 @@ class SqoopOperatorIncremental(SqoopOperator):
     def __read_last_value(self, context):
         session_maker = self.hook.get_session_maker()
         session = session_maker()
-        result = session.query(self.metastore_table) \
+        result = session.query(self.hook.get_metastore_table()) \
             .filter_by(job='%s.%s' % (context['dag'].dag_id, context['task_instance'].task_id)) \
             .filter_by(variable='%s' % self.extra_import_options['check-column']) \
             .all()
@@ -283,15 +288,14 @@ class SqoopOperatorIncremental(SqoopOperator):
         if result != []:
             return result[0][1]
         else:
-            if self.extra_import_options['column_type'] == 'int':
+            if self.extra_import_options['column-type'] == 'int':
                 return '%d' % (-sys.maxsize - 1)
-            elif self.extra_import_options['column_type'] == 'datetime' or self.extra_import_options['column_type'] == 'date':
+            elif self.extra_import_options['column-type'] == 'datetime' or self.extra_import_options['column-type'] == 'date':
                 return '1970-01-01'
             else:
                 raise AirflowException("Unknown incremental column type")
 
     def __update_metadata_sqoop(self, context):
-
         base_log_folder = conf.get("logging", "base_log_folder").rstrip("/")
 
         dag_runs = os.listdir(os.path.join(base_log_folder, context['dag'].dag_id, context['task_instance'].task_id))
@@ -308,10 +312,10 @@ class SqoopOperatorIncremental(SqoopOperator):
             else:
                 raise AirflowException('Last-value parameter not found in Logs!')
 
-            insert_query = insert(self.metastore_table).values(
+            insert_query = insert(self.hook.get_metastore_table()).values(
                 job='%s.%s' % (context['dag'].dag_id, context['task_instance'].task_id), last_value=last_value,
-                update_datetime=datetime.datetime.now(), column=self.extra_import_options['check-column'])
-            insert_query = insert_query.on_conflict_do_update(constraint='job_metadata_pk',
+                update_datetime=datetime.datetime.now(), variable=self.extra_import_options['check-column'])
+            insert_query = insert_query.on_conflict_do_update(constraint=self.hook.get_metastore_table().primary_key,
                                                               set_=dict(insert_query.excluded))
 
             conn = self.hook.get_engine().connect()
@@ -321,3 +325,15 @@ class SqoopOperatorIncremental(SqoopOperator):
                 raise AirflowException('Error in updating last value of Sqoop job.')
             finally:
                 conn.close()
+
+    def _get_hook(self) -> SqoopHook:
+        return SqoopHook(
+            conn_id=self.conn_id,
+            verbose=self.verbose,
+            num_mappers=self.num_mappers,
+            hcatalog_database=self.hcatalog_database,
+            hcatalog_table=self.hcatalog_table,
+            properties=self.properties,
+            conn_metastore_id=self.conn_metastore_id,
+            metastore_table_name=self.metastore_table_name,
+        )
