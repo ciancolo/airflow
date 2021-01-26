@@ -24,6 +24,9 @@ from typing import Any, Dict, List, Optional
 
 from airflow.exceptions import AirflowException
 from airflow.hooks.base import BaseHook
+from sqlalchemy import create_engine, MetaData, func, Table
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import insert
 
 
 class SqoopHook(BaseHook):
@@ -65,6 +68,7 @@ class SqoopHook(BaseHook):
         hcatalog_database: Optional[str] = None,
         hcatalog_table: Optional[str] = None,
         properties: Optional[Dict[str, Any]] = None,
+        conn_metastore_id: Optional[str] = None
     ) -> None:
         # No mutable types in the default parameters
         super().__init__()
@@ -83,6 +87,14 @@ class SqoopHook(BaseHook):
         self.properties = properties or {}
         self.log.info("Using connection to: %s:%s/%s", self.conn.host, self.conn.port, self.conn.schema)
         self.sub_process: Any = None
+        if conn_metastore_id:
+            self.conn_metastore = self.get_connection(conn_metastore_id)
+            self.connection_metastore_parameters = self.conn_metastore.extra_dejson
+            connection_url = self.create_connection_metastore()
+            self.engine = create_engine(connection_url, echo=False)
+            self.metadata = MetaData(self.engine)
+
+            self.session_maker = sessionmaker(bind=self.engine)
 
     def get_conn(self) -> Any:
         return self.conn
@@ -427,3 +439,16 @@ class SqoopHook(BaseHook):
         )
 
         self.popen(cmd)
+
+    def create_connection_metastore(self):
+        connection_url = '%s://%s:%s@%s:%s/%s' % (
+            self.conn_metastore.conn_type, self.conn_metastore.login, self.conn_metastore.password,
+            self.conn_metastore.host, self.conn_metastore.port, self.conn_metastore.schema)
+
+        return connection_url
+
+    def get_session_maker(self):
+        return self.session_maker
+
+    def get_engine(self):
+        return self.engine
