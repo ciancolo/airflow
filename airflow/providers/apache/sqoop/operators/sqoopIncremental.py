@@ -204,14 +204,15 @@ class SqoopOperatorIncremental(SqoopOperator):
         if self.conn_metastore_id and \
             'check-column' in self.extra_import_options.keys() and \
             'incremental' in self.extra_import_options.keys():
-            if 'column-type' not in self.extra_import_options.keys():
-                raise AirflowException('column-type properties needed for incremental Sqoop')
+
             self.log.info('Gather last-value for %s.%s and column %s from SqoopMetastore' %
                           (context['dag'].dag_id, context['task_instance'].task_id,
                            self.extra_import_options['check-column']))
+
             last_value = self.__read_last_value(context)
-            self.extra_import_options['last-value'] = last_value
-            self.extra_import_options.pop('column-type')
+
+            if last_value:
+                self.extra_import_options['last-value'] = last_value
 
         if self.cmd_type == 'export':
             self.hook.export_table(
@@ -288,17 +289,13 @@ class SqoopOperatorIncremental(SqoopOperator):
         if result != []:
             return result[0][1]
         else:
-            if self.extra_import_options['column-type'] == 'int':
-                return '%d' % (-sys.maxsize - 1)
-            elif self.extra_import_options['column-type'] == 'datetime' or self.extra_import_options['column-type'] == 'date':
-                return '1970-01-01'
-            else:
-                raise AirflowException("Unknown incremental column type")
+            None
 
     def __update_metadata_sqoop(self, context):
         base_log_folder = conf.get("logging", "base_log_folder").rstrip("/")
 
-        with open(os.path.join(base_log_folder, context['dag'].dag_id, context['task_instance'].task_id, context['execution_date'].isoformat(),
+        with open(os.path.join(base_log_folder, context['dag'].dag_id, context['task_instance'].task_id,
+                               context['execution_date'].isoformat(),
                                '%d.log' % context['ti'].try_number), 'rt') as file_log:
             data = file_log.read()
             if data.find('INFO tool.ImportTool:   --last-value') > 1:
