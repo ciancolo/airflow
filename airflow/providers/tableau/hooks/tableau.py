@@ -59,6 +59,10 @@ class TableauHook(BaseHook):
     def __init__(self, site_id: Optional[str] = None, tableau_conn_id: str = default_conn_name) -> None:
         super().__init__()
         self.tableau_conn_id = tableau_conn_id
+        if site_id:
+            self.site_id = site_id
+        else:
+            self.site_id = ''
         self.conn = self.get_connection(self.tableau_conn_id)
         self.server = Server(self.conn.host)
         self.server.add_http_options({'verify': self.conn.extra_dejson.get('verify', False)})
