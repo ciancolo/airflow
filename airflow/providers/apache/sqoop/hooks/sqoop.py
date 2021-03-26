@@ -288,8 +288,15 @@ class SqoopHook(BaseHook):
             If a key doesn't have a value, just pass an empty string to it.
             Don't include prefix of -- for sqoop options.
         """
+        if 'schema' in extra_import_options.keys():
+            schema = extra_import_options.pop('schema')
+        else:
+            schema = None
         cmd = self._import_cmd(target_dir, append, file_type, split_by, direct, driver, extra_import_options)
         cmd += ["--query", query]
+
+        if schema:
+            cmd += ["--", "--schema", schema]
 
         self.popen(cmd)
 
