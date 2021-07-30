@@ -653,6 +653,14 @@ Docker building ${AIRFLOW_CI_IMAGE}.
     if [[ -n "${RUNTIME_APT_COMMAND}" ]]; then
         additional_runtime_args+=("--build-arg" "RUNTIME_APT_COMMAND=\"${RUNTIME_APT_COMMAND}\"")
     fi
+    if [[ -n "${AIRFLOW_HTTP_PROXY}" ]]; then
+        additional_runtime_args+=("--build-arg" "AIRFLOW_HTTP_PROXY=${AIRFLOW_HTTP_PROXY}")
+        additional_runtime_args+=("--build-arg" "http_proxy=${AIRFLOW_HTTP_PROXY}")
+    fi
+    if [[ -n "${AIRFLOW_HTTPS_PROXY}" ]]; then
+        additional_runtime_args+=("--build-arg" "AIRFLOW_HTTPS_PROXY=${AIRFLOW_HTTPS_PROXY}")
+        additional_runtime_args+=("--build-arg" "https_proxy=${AIRFLOW_HTTPS_PROXY}")
+    fi
     docker_v build \
         "${EXTRA_DOCKER_CI_BUILD_FLAGS[@]}" \
         --build-arg PYTHON_BASE_IMAGE="${AIRFLOW_PYTHON_BASE_IMAGE}" \
@@ -791,6 +799,14 @@ function build_images::build_prod_images() {
     fi
     if [[ -n "${DEV_APT_COMMAND}" ]]; then
         additional_dev_args+=("--build-arg" "DEV_APT_COMMAND=\"${DEV_APT_COMMAND}\"")
+    fi
+    if [[ -n "${AIRFLOW_HTTP_PROXY}" ]]; then
+        additional_dev_args+=("--build-arg" "AIRFLOW_HTTP_PROXY=${AIRFLOW_HTTP_PROXY}")
+        additional_runtime_args+=("--build-arg" "http_proxy=${AIRFLOW_HTTP_PROXY}")
+    fi
+    if [[ -n "${AIRFLOW_HTTPS_PROXY}" ]]; then
+        additional_dev_args+=("--build-arg" "AIRFLOW_HTTPS_PROXY=${AIRFLOW_HTTPS_PROXY}")
+        additional_runtime_args+=("--build-arg" "https_proxy=${AIRFLOW_HTTP_PROXY}")
     fi
     docker_v build \
         "${EXTRA_DOCKER_PROD_BUILD_FLAGS[@]}" \
