@@ -171,7 +171,7 @@ kubernetes-mode: kubernetes-version: helm-version: kind-version:
 skip-mounting-local-sources mount-all-local-sources install-airflow-version: install-airflow-reference: db-reset
 verbose assume-yes assume-no assume-quit forward-credentials init-script:
 force-build-images force-pull-images check-if-base-python-image-updated production-image extras: force-clean-images skip-rebuild-check
-build-cache-local build-cache-pulled build-cache-disabled disable-pip-cache
+build-cache-local build-cache-pulled build-cache-disabled disable-pip-cache build-http-proxy: build-https-proxy:
 github-repository: github-image-id: generate-constraints-mode:
 postgres-version: mysql-version: mssql-version:
 version-suffix-for-pypi: version-suffix-for-svn:

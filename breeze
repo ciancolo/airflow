@@ -1000,6 +1000,24 @@ function breeze::parse_arguments() {
             export FORCE_ANSWER_TO_QUESTIONS="yes"
             shift
             ;;
+        --build-http-proxy)
+            echo "HTTP proxy for build"
+            echo
+            export AIRFLOW_HTTP_PROXY=${2}
+            echo "AIRFLOW_HTTP_PROXY : ${AIRFLOW_HTTP_PROXY}"
+            echo
+            readonly AIRFLOW_HTTP_PROXY
+            shift 2
+            ;;
+        --build-https-proxy)
+            echo "HTTPS proxy for build"
+            echo
+            export AIRFLOW_HTTPS_PROXY=${2}
+            echo "AIRFLOW_HTTPS_PROXY : ${AIRFLOW_HTTPS_PROXY}"
+            echo
+            readonly AIRFLOW_HTTPS_PROXY
+            shift 2
+            ;;
         --check-if-base-python-image-updated)
             echo "Checks if base python image has been."
             echo
@@ -2736,6 +2754,12 @@ Build options:
         in the 'docker-context-files' folder. The same flag can be used during entering the image in
         the CI image - in this case also the .whl and .tar.gz files will be installed automatically
 
+--build-https-proxy AIRFLOW_HTTPS_PROXY
+        Set HTTPS proxy during docker builds. This is useful in case image building behind proxy.
+
+--build-http-proxy AIRFLOW_HTTP_PROXY
+        Set HTTP proxy during docker builds. This is useful in case image building behind proxy.
+
 -C, --force-clean-images
         Force build images with cache disabled. This will remove the pulled or build images
         and start building images from scratch. This might take a long time.
@@ -2765,6 +2789,7 @@ Build options:
 
         This strategy is used by default for both Production and CI images for the scheduled
         (nightly) builds in CI.
+
 
 "
 }
