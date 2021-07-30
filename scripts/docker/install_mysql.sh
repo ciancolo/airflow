@@ -17,7 +17,6 @@
 # under the License.
 set -euo pipefail
 
-set -x
 declare -a packages
 
 MYSQL_VERSION="8.0"
@@ -38,6 +37,7 @@ install_mysql_client() {
         echo
         exit 1
     fi
+    shift
 
     local key="A4A9406876FCBD3C456770C88C718D3B5072E1F5"
     readonly key
@@ -45,10 +45,20 @@ install_mysql_client() {
     GNUPGHOME="$(mktemp -d)"
     export GNUPGHOME
     set +e
+
+    # Set Proxy configuration for gpg if set from User
+    keyserver_options=" "
+    if [[ -n "${AIRFLOW_HTTP_PROXY}" ]]; then
+        keyserver_options+="--keyserver-options http-proxy=${AIRFLOW_HTTP_PROXY} "
+    fi
+    if [[ -n "${AIRFLOW_HTTPS_PROXY}" ]]; then
+        keyserver_options+="--keyserver-options https-proxy=${AIRFLOW_HTTPS_PROXY} "
+    fi
+
     for keyserver in $(shuf -e ha.pool.sks-keyservers.net hkp://p80.pool.sks-keyservers.net:80 \
                                keyserver.ubuntu.com hkp://keyserver.ubuntu.com:80)
     do
-        gpg --keyserver "${keyserver}" --recv-keys "${key}" && break
+        gpg --keyserver "${keyserver}" ${keyserver_options} --recv-keys "${key}" && break
     done
     set -e
     gpg --export "${key}" > /etc/apt/trusted.gpg.d/mysql.gpg
