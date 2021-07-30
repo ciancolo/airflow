@@ -2578,6 +2578,12 @@ This is the current syntax for  `./breeze <./breeze>`_:
   --disable-pip-cache
           Disables GitHub PIP cache during the build. Useful if GitHub is not reachable during build.
 
+  --build-https-proxy
+          Set HTTPS proxy during docker builds. This is useful in case image building behind proxy.
+
+  --build-http-proxy
+          Set HTTP proxy during docker builds. This is useful in case image building behind proxy.
+
   --install-from-docker-context-files
           This flag is used during image building. If it is used additionally to installing
           Airflow from PyPI, the packages are installed from the .whl and .tar.gz packages placed
