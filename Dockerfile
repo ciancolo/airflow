@@ -55,6 +55,9 @@ ARG PIP_PROGRESS_BAR="on"
 FROM ${PYTHON_BASE_IMAGE} as airflow-build-image
 SHELL ["/bin/bash", "-o", "pipefail", "-e", "-u", "-x", "-c"]
 
+ARG AIRFLOW_HTTPS_PROXY
+ARG AIRFLOW_HTTP_PROXY
+
 ARG PYTHON_BASE_IMAGE
 ENV PYTHON_BASE_IMAGE=${PYTHON_BASE_IMAGE} \
     DEBIAN_FRONTEND=noninteractive LANGUAGE=C.UTF-8 LANG=C.UTF-8 LC_ALL=C.UTF-8 \
@@ -213,10 +216,10 @@ ENV AIRFLOW_PRE_CACHED_PIP_PACKAGES=${AIRFLOW_PRE_CACHED_PIP_PACKAGES} \
 # the cache is only used when "upgrade to newer dependencies" is not set to automatically
 # account for removed dependencies (we do not install them in the first place)
 # Upgrade to specific PIP version
-RUN bash /scripts/docker/install_pip_version.sh; \
+RUN bash /scripts/docker/install_pip_version.sh --http_proxy=${AIRFLOW_HTTP_PROXY} --https_proxy=${AIRFLOW_HTTPS_PROXY}; \
     if [[ ${AIRFLOW_PRE_CACHED_PIP_PACKAGES} == "true" && \
           ${UPGRADE_TO_NEWER_DEPENDENCIES} == "false" ]]; then \
-        bash /scripts/docker/install_airflow_from_branch_tip.sh; \
+        bash /scripts/docker/install_airflow_from_branch_tip.sh --http_proxy=${AIRFLOW_HTTP_PROXY} --https_proxy=${AIRFLOW_HTTPS_PROXY};; \
     fi
 
 COPY ${AIRFLOW_SOURCES_FROM} ${AIRFLOW_SOURCES_TO}
