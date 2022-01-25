@@ -301,6 +301,8 @@ class SqoopOperatorIncremental(SqoopOperator):
             if data.find('INFO tool.ImportTool:   --last-value') > 1:
                 last_value = data.split('INFO tool.ImportTool:   --last-value')[1].split('\'\n')[0]
             else:
+                if data.find('INFO tool.ImportTool: No new rows detected since last import.') > 1:
+                    return
                 raise AirflowException('Last-value parameter not found in Logs!')
 
             insert_query = insert(self.hook.get_metastore_table()).values(
