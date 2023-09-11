@@ -208,6 +208,12 @@ class SqoopOperatorIncremental(SqoopOperator):
             self.log.info('Gather last-value for %s.%s and column %s from SqoopMetastore' %
                           (context['dag'].dag_id, context['task_instance'].task_id,
                            self.extra_import_options['check-column']))
+            
+            # Not consider row with incremental column equals to Null
+            if self.where:
+                self.where = self.where + f" and {self.extra_import_options['check-column']} is not null"
+            else:
+                self.where = "{self.extra_import_options['check-column']} is not null"
 
             last_value = self.__read_last_value(context)
 
