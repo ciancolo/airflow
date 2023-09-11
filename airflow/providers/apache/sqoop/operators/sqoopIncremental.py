@@ -215,7 +215,7 @@ class SqoopOperatorIncremental(SqoopOperator):
             elif self.where:
                 self.where = self.where + f" and {self.extra_import_options['check-column']} is not null"
             else: 
-                self.where = "{self.extra_import_options['check-column']} is not null"
+                self.where = f"{self.extra_import_options['check-column']} is not null"
 
             last_value = self.__read_last_value(context)
 
