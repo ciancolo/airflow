@@ -220,7 +220,7 @@ class SqoopOperatorIncremental(SqoopOperator):
             last_value = self.__read_last_value(context)
 
             if last_value:
-                self.extra_import_options['last-value'] = last_value
+                self.extra_import_options['last-value'] = self.__manage_incremental_overlap(last_value)
 
         if self.cmd_type == 'export':
             self.hook.export_table(
@@ -338,3 +338,31 @@ class SqoopOperatorIncremental(SqoopOperator):
             conn_metastore_id=self.conn_metastore_id,
             metastore_table_name=self.metastore_table_name,
         )
+    
+    def __manage_incremental_overlap(self, last_value) -> str:
+
+        if not last_value or \
+            last_value == ' null':
+            return last_value
+
+        if 'overlap-value' in self.extra_import_options.keys() and \
+            'overlap-type' in self.extra_import_options.keys():
+            # Check overlap-type is a valid value
+            if not self.extra_import_options['overlap-type'].isin(['numeric', 'timestamp']):
+                self.log.error(f"{self.extra_import_options['overlap-type']} is not a valid value. Valid values are numeric or timestamp")
+                raise AirflowException(f"{self.extra_import_options['overlap-type']} is not a valid value. Valid values are numeric or timestamp")
+            # Check if overlap-format is present and with a valid value
+            if self.extra_import_options['overlap-type'] == 'timestamp' and \
+                'overlap-format' in self.extra_import_options.keys():
+                if not self.extra_import_options['overlap-format'].isin(['days', 'hours', 'minutes', 'seconds']):
+                    self.log.error(f"{self.extra_import_options['overlap-format']} is not a valid value. Valid values are days, hours, minutes or seconds")
+                    raise AirflowException(f"{self.extra_import_options['overlap-format']} is not a valid value. Valid values are days, hours, minutes or seconds")
+            # Adjust the last-value with the overlap
+            if self.extra_import_options['overlap-type'] == 'timestamp':
+                db_last_value = datetime.datetime.strptime(last_value, ' %Y-%m-%d %H:%M:%S.%f')
+                updated_last_value = db_last_value - datetime.timedelta(**{self.extra_import_options['overlap-format']: self.extra_import_options['overlap-value']})
+                last_value = datetime.datetime.strftime(updated_last_value,' %Y-%m-%d %H:%M:%S.%f')
+            else:
+                last_value = f" {eval(last_value) - self.extra_import_options['overlap-value']}"
+
+        return last_value
