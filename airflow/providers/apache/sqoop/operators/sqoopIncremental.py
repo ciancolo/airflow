@@ -304,9 +304,14 @@ class SqoopOperatorIncremental(SqoopOperator):
     def __update_metadata_sqoop(self, context):
         base_log_folder = conf.get("logging", "base_log_folder").rstrip("/")
 
-        with open(os.path.join(base_log_folder, context['dag'].dag_id, context['task_instance'].task_id,
-                               context['execution_date'].isoformat(),
-                               '%d.log' % context['ti'].try_number), 'rt') as file_log:
+        if context['ti'].map_index >= 0:
+            end_log_file = f"map_index={context['ti'].map_index }/attempt={context['ti'].try_number}.log"
+        else:
+            end_log_file = f"attempt={context['ti'].try_number}.log"
+        log_dag_id = f"dag_id={context['dag'].dag_id}"
+        log_run_id = f"run_id={context['task_instance'].run_id}"
+        log_task_id = f"task_id={context['task_instance'].task_id}"
+        with open(os.path.join(base_log_folder, log_dag_id, log_run_id, log_task_id, end_log_file), 'rt') as file_log:
             data = file_log.read()
             if data.find('INFO tool.ImportTool:   --last-value') > 1:
                 last_value = data.split('INFO tool.ImportTool:   --last-value')[1].split('\'\n')[0]
