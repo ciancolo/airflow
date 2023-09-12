@@ -221,6 +221,8 @@ class SqoopOperatorIncremental(SqoopOperator):
 
             if last_value:
                 self.extra_import_options['last-value'] = self.__manage_incremental_overlap(last_value)
+        
+        [self.extra_import_options.pop(k, None) for k in ['overlap-type', 'overlap-value', 'overlap-format']]
 
         if self.cmd_type == 'export':
             self.hook.export_table(
@@ -340,23 +342,30 @@ class SqoopOperatorIncremental(SqoopOperator):
         )
     
     def __manage_incremental_overlap(self, last_value) -> str:
-
+        self.log.info('Manage overlap for incremental value')
         if not last_value or \
             last_value == ' null':
             return last_value
 
         if 'overlap-value' in self.extra_import_options.keys() and \
-            'overlap-type' in self.extra_import_options.keys():
+           'overlap-type' in self.extra_import_options.keys():
+
             # Check overlap-type is a valid value
             if not self.extra_import_options['overlap-type'].isin(['numeric', 'timestamp']):
                 self.log.error(f"{self.extra_import_options['overlap-type']} is not a valid value. Valid values are numeric or timestamp")
                 raise AirflowException(f"{self.extra_import_options['overlap-type']} is not a valid value. Valid values are numeric or timestamp")
+            
             # Check if overlap-format is present and with a valid value
             if self.extra_import_options['overlap-type'] == 'timestamp' and \
                 'overlap-format' in self.extra_import_options.keys():
+
                 if not self.extra_import_options['overlap-format'].isin(['days', 'hours', 'minutes', 'seconds']):
                     self.log.error(f"{self.extra_import_options['overlap-format']} is not a valid value. Valid values are days, hours, minutes or seconds")
                     raise AirflowException(f"{self.extra_import_options['overlap-format']} is not a valid value. Valid values are days, hours, minutes or seconds")
+            else:
+                self.log.error(f"overlap-format parameter not specified with overlap_type timestamp")
+                raise AirflowException(f"overlap-format parameter not specified with overlap_type timestamp")
+                
             # Adjust the last-value with the overlap
             if self.extra_import_options['overlap-type'] == 'timestamp':
                 db_last_value = datetime.datetime.strptime(last_value, ' %Y-%m-%d %H:%M:%S.%f')
