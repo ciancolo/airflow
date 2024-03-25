@@ -92,7 +92,7 @@ class SqoopHook(BaseHook):
             self.conn_metastore = self.get_connection(conn_metastore_id)
             self.connection_metastore_parameters = self.conn_metastore.extra_dejson
             connection_url = self.create_connection_metastore()
-            self.engine = create_engine(connection_url, echo=False)
+            self.engine = create_engine(connection_url, echo=False, pool_pre_ping=True)
             self.metadata = MetaData(self.engine)
             self.session_maker = sessionmaker(bind=self.engine)
             self.metastore_table = Table(metastore_table_name, self.metadata, autoload=True)
