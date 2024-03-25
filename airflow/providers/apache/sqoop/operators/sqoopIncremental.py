@@ -374,7 +374,7 @@ class SqoopOperatorIncremental(SqoopOperator):
             if self.extra_import_options['overlap-type'] == 'timestamp':
                 db_last_value = datetime.datetime.strptime(last_value, ' %Y-%m-%d %H:%M:%S.%f')
                 updated_last_value = db_last_value - datetime.timedelta(**{self.extra_import_options['overlap-format']: self.extra_import_options['overlap-value']})
-                last_value = datetime.datetime.strftime(updated_last_value,' %Y-%m-%d %H:%M:%S.%f')
+                last_value = datetime.datetime.strftime(updated_last_value,' %Y-%m-%d %H:%M:%S')
             else:
                 last_value = f" {eval(last_value) - self.extra_import_options['overlap-value']}"
 
