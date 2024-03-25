@@ -86,6 +86,7 @@ class SqoopHook(BaseHook):
         self.verbose = verbose
         self.num_mappers = num_mappers
         self.properties = properties or {}
+        self.sub_process_pid: int
         self.log.info("Using connection to: %s:%s/%s", self.conn.host, self.conn.port, self.conn.schema)
         self.sub_process: Any = None
         if conn_metastore_id:
@@ -120,17 +121,15 @@ class SqoopHook(BaseHook):
         """
         masked_cmd = ' '.join(self.cmd_mask_password(cmd))
         self.log.info("Executing command: %s", masked_cmd)
-        self.sub_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs) as sub_process:
+            self.sub_process_pid = sub_process.pid
+            for line in iter(sub_process.stdout):  # type: ignore
+                self.log.info(line.strip())
+            sub_process.wait()
+            self.log.info("Command exited with return code %s", sub_process.returncode)
+            if sub_process.returncode:
+                raise AirflowException(f"Sqoop command failed: {masked_cmd}")
 
-        for line in iter(self.sub_process.stdout):  # type: ignore
-            self.log.info(line.strip())
-
-        self.sub_process.wait()
-
-        self.log.info("Command exited with return code %s", self.sub_process.returncode)
-
-        if self.sub_process.returncode:
-            raise AirflowException(f"Sqoop command failed: {masked_cmd}")
 
     def _prepare_command(self, export: bool = False) -> List[str]:
         sqoop_cmd_type = "export" if export else "import"
@@ -242,12 +241,14 @@ class SqoopHook(BaseHook):
         direct: bool = False,
         driver: Any = None,
         extra_import_options: Optional[Dict[str, Any]] = None,
+	schema: Optional[str] = None,
     ) -> Any:
         """
         Imports table from remote location to target dir. Arguments are
         copies of direct sqoop command line arguments
 
         :param table: Table to read
+	:param schema: Schema name
         :param target_dir: HDFS destination dir
         :param append: Append data to an existing dataset in HDFS
         :param file_type: "avro", "sequence", "text" or "parquet".
@@ -327,6 +328,7 @@ class SqoopHook(BaseHook):
         batch: bool = False,
         relaxed_isolation: bool = False,
         extra_export_options: Optional[Dict[str, Any]] = None,
+	schema: Optional[str] = None,
     ) -> List[str]:
 
         cmd = self._prepare_command(export=True)
@@ -375,6 +377,9 @@ class SqoopHook(BaseHook):
 
         # The required option
         cmd += ["--table", table]
+		
+        if schema:
+            cmd += ["--", "--schema", schema]
 
         return cmd
 
@@ -395,12 +400,14 @@ class SqoopHook(BaseHook):
         batch: bool = False,
         relaxed_isolation: bool = False,
         extra_export_options: Optional[Dict[str, Any]] = None,
+	schema: Optional[str] = None,
     ) -> None:
         """
         Exports Hive table to remote location. Arguments are copies of direct
         sqoop command line Arguments
 
         :param table: Table remote destination
+	:param schema: Schema name
         :param export_dir: Hive table to export
         :param input_null_string: The string to be interpreted as null for
             string columns
@@ -437,13 +444,14 @@ class SqoopHook(BaseHook):
             batch,
             relaxed_isolation,
             extra_export_options,
+	    schema,
         )
 
         self.popen(cmd)
 
     def create_connection_metastore(self):
         connection_url = '%s://%s:%s@%s:%s/%s' % (
-            self.conn_metastore.conn_type, self.conn_metastore.login, self.conn_metastore.password,
+            self.conn_metastore.conn_type.replace('postgres', 'postgresql'), self.conn_metastore.login, self.conn_metastore.password,
             self.conn_metastore.host, self.conn_metastore.port, self.conn_metastore.schema)
 
         return connection_url
