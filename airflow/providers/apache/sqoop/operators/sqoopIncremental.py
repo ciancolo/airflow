@@ -211,9 +211,9 @@ class SqoopOperatorIncremental(SqoopOperator):
             
             # Not consider row with incremental column equals to Null
             if self.query:
-                self.query = self.query + f" and {self.extra_import_options['check-column']} is not null"
+                self.query = self.query + f" and \"{self.extra_import_options['check-column']}\" is not null"
             elif self.where:
-                self.where = self.where + f" and {self.extra_import_options['check-column']} is not null"
+                self.where = self.where + f" and \"{self.extra_import_options['check-column']}\" is not null"
             else: 
                 self.where = f"{self.extra_import_options['check-column']} is not null"
 
