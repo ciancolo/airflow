@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from airflow.providers.apache.spark.hooks.spark_jdbc import SparkJDBCHook
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.exceptions import AirflowException
+import datetime
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
@@ -110,6 +112,13 @@ class SparkJDBCOperator(SparkSubmitOperator):
         lower_bound: str | None = None,
         upper_bound: str | None = None,
         create_table_column_types: str | None = None,
+        conn_metastore_id: str | None = None,
+        metastore_table_name: str | None = None,
+        check_column: str | None = None,
+        overlap_type: str | None = None,
+        overlap_value: str | None = None,
+        overlap_format: str | None = None,
+        output_path: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -135,11 +144,42 @@ class SparkJDBCOperator(SparkSubmitOperator):
         self._upper_bound = upper_bound
         self._create_table_column_types = create_table_column_types
         self._hook: SparkJDBCHook | None = None
+        self.conn_metastore_id = conn_metastore_id
+        self.metastore_table_name = metastore_table_name
+        self.check_column = check_column
+        self.overlap_type = overlap_type
+        self.overlap_value = overlap_value
+        self.overlap_format = overlap_format
+        self.output_path = output_path
 
     def execute(self, context: Context) -> None:
         """Call the SparkSubmitHook to run the provided spark job."""
+        self.dag_name = context['dag'].dag_id
+        self.task_name = context['task_instance'].task_id
+
         if self._hook is None:
             self._hook = self._get_hook()
+        
+        if self.conn_metastore_id and \
+            self.check_column:
+
+            self.log.info('Gather last-value for %s.%s and column %s from SqoopMetastore' %
+                          (context['dag'].dag_id, context['task_instance'].task_id,
+                           self.check_column))
+            
+            # Not consider row with incremental column equals to Null
+            if self.query:
+                self.query = self.query + f" and \"{self.check_column}\" is not null"
+            elif self.where:
+                self.where = self.where + f" and \"{self.check_column}\" is not null"
+            else: 
+                self.where = f"{self.check_column} is not null"
+
+            self.last_value = self.__read_last_value(context)
+
+            if self.last_value:
+                self.last_value = self.__manage_incremental_overlap(self.last_value)
+        
         self._hook.submit_jdbc_job()
 
     def on_kill(self) -> None:
@@ -178,4 +218,57 @@ class SparkJDBCOperator(SparkSubmitOperator):
             upper_bound=self._upper_bound,
             create_table_column_types=self._create_table_column_types,
             use_krb5ccache=self._use_krb5ccache,
+            conn_metastore_id = self.conn_metastore_id,
+            metastore_table_name = self.metastore_table_name,
+            check_column = self.check_column,
+            dag_name = self.dag_name,
+            task_name = self.task_name,
+            last_value = self.last_value,
+            output_path = self.output_path
         )
+
+    def __read_last_value(self, context):
+        session_maker = self.hook.get_session_maker()
+        session = session_maker()
+        result = session.query(self.hook.get_metastore_table()) \
+                        .filter_by(job='%s.%s' % (context['dag'].dag_id, context['task_instance'].task_id)) \
+                        .filter_by(variable='%s' % self.check_column) \
+                        .all()
+
+        if result != []:
+            return result[0][1].strip()
+        else:
+            None
+
+    def __manage_incremental_overlap(self, last_value) -> str:
+        self.log.info('Manage overlap for incremental value')
+        if not last_value or \
+            last_value == ' null':
+            return last_value
+
+        if self.overlap_value and self.overlap_type:
+
+            # Check overlap-type is a valid value
+            if not self.overlap_type in ['numeric', 'timestamp']:
+                self.log.error(f"{self.overlap_type} is not a valid value. Valid values are numeric or timestamp")
+                raise AirflowException(f"{self.overlap_type} is not a valid value. Valid values are numeric or timestamp")
+            
+            # Check if overlap-format is present and with a valid value
+            if self.overlap_type == 'timestamp':
+                if self.overlap_format:
+                    if not self.overlap_format in ['days', 'hours', 'minutes', 'seconds']:
+                        self.log.error(f"{self.overlap_format} is not a valid value. Valid values are days, hours, minutes or seconds")
+                        raise AirflowException(f"{self.overlap_format} is not a valid value. Valid values are days, hours, minutes or seconds")
+                else:
+                    self.log.error(f"overlap-format parameter not specified with overlap-type timestamp")
+                    raise AirflowException(f"overlap-format parameter not specified with overlap-type timestamp")
+                
+            # Adjust the last-value with the overlap
+            if self.overlap_type == 'timestamp':
+                db_last_value = datetime.datetime.strptime(last_value, ' %Y-%m-%d %H:%M:%S.%f')
+                updated_last_value = db_last_value - datetime.timedelta(**{self.overlap_format: self.overlap_value})
+                last_value = datetime.datetime.strftime(updated_last_value,' %Y-%m-%d %H:%M:%S')
+            else:
+                last_value = f" {eval(last_value) - self.overlap_value}"
+
+        return last_value

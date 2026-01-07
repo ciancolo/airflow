@@ -22,6 +22,9 @@ from typing import Any
 
 from airflow.exceptions import AirflowException
 from airflow.providers.apache.spark.hooks.spark_submit import SparkSubmitHook
+from sqlalchemy import create_engine, MetaData, func, Table
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import insert
 
 
 class SparkJDBCHook(SparkSubmitHook):
@@ -124,6 +127,13 @@ class SparkJDBCHook(SparkSubmitHook):
         create_table_column_types: str | None = None,
         *args: Any,
         use_krb5ccache: bool = False,
+        conn_metastore_id: str | None = None,
+        metastore_table_name: str | None = None,
+        check_column: str | None = None,
+        dag_name: str | None = None,
+        task_name: str | None = None,
+        last_value: str | None = None,
+        output_path: str | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
@@ -157,6 +167,20 @@ class SparkJDBCHook(SparkSubmitHook):
         self._create_table_column_types = create_table_column_types
         self._jdbc_connection = self._resolve_jdbc_connection()
         self._use_krb5ccache = use_krb5ccache
+        self.metastore_table_name = metastore_table_name
+        self.check_column = check_column
+        if conn_metastore_id:
+            self.conn_metastore = self.get_connection(conn_metastore_id)
+            self.connection_metastore_parameters = self.conn_metastore.extra_dejson
+            self.connection_url_metastore = self.create_connection_metastore()
+            self.engine = create_engine(self.connection_url_metastore, echo=False, pool_pre_ping=True)
+            self.metadata = MetaData(self.engine)
+            self.session_maker = sessionmaker(bind=self.engine)
+            self.metastore_table = Table(self.metastore_table_name, self.metadata, autoload=True)
+        self.task_name = task_name
+        self.dag_name = dag_name
+        self.last_value = last_value
+        self.output_path = output_path
 
     def _resolve_jdbc_connection(self) -> dict[str, Any]:
         conn_data = {"url": "", "schema": "", "conn_prefix": "", "user": "", "password": ""}
@@ -225,6 +249,19 @@ class SparkJDBCHook(SparkSubmitHook):
             arguments += ["-saveFormat", self._save_format]
         if self._create_table_column_types:
             arguments += ["-createTableColumnTypes", self._create_table_column_types]
+        if self.connection_url_metastore:
+            arguments += ["-connectionMetastore", self.connection_url_metastore, 
+                          "-dagName", self.dag_name,
+                          "-taskName", self.task_name]  
+        if self.check_column:
+            arguments += ["-checkColumn", self.check_column]
+        if self.last_value:
+            arguments += ["-lastValue", self.last_value]
+        if self.output_path:
+            arguments += ["-outputPath", self.output_path]
+        if self.metastore_table_name:
+            arguments += ["-metastoreTableName", self.metastore_table_name]
+
         return arguments
 
     def submit_jdbc_job(self) -> None:
@@ -234,3 +271,19 @@ class SparkJDBCHook(SparkSubmitHook):
 
     def get_conn(self) -> Any:
         pass
+    
+    def create_connection_metastore(self):
+        connection_url = '%s://%s:%s@%s:%s/%s' % (
+            self.conn_metastore.conn_type.replace('postgres', 'postgresql'), self.conn_metastore.login, self.conn_metastore.password,
+            self.conn_metastore.host, self.conn_metastore.port, self.conn_metastore.schema)
+
+        return connection_url
+
+    def get_session_maker(self):
+        return self.session_maker
+
+    def get_engine(self):
+        return self.engine
+
+    def get_metastore_table(self):
+        return self.metastore_table

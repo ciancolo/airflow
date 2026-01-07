@@ -21,6 +21,10 @@ import argparse
 from typing import Any
 
 from pyspark.sql import SparkSession
+from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy.dialects.postgresql import insert
+from airflow.exceptions import AirflowException
+import datetime
 
 SPARK_WRITE_TO_JDBC: str = "spark_to_jdbc"
 SPARK_READ_FROM_JDBC: str = "jdbc_to_spark"
@@ -102,10 +106,26 @@ def spark_read_from_jdbc(
     partition_column: str,
     lower_bound: str,
     upper_bound: str,
+    dag_name: str,
+    task_name: str,
+    check_column: str,
+    last_value: str,
+    output_path: str,
+    connection_metastore: str,
+    metastore_table_name: str
 ) -> None:
     """Transfer data from JDBC source to Spark."""
     # first set common options
     reader = set_common_options(spark_session.read, url, jdbc_table, user, password, driver)
+
+    if check_column is not None and last_value is not None:
+        try:
+            last_value = float(last_value)
+        except ValueError:
+            last_value = f"\'{last_value}\'"
+        where_condition = f"{check_column} > {last_value}"
+    else:
+        where_condition = "true"
 
     # now set specific read options
     if fetch_size:
@@ -119,8 +139,42 @@ def spark_read_from_jdbc(
             .option("upperBound", upper_bound)
         )
 
-    reader.load().write.saveAsTable(metastore_table, format=save_format, mode=save_mode)
+    # Load data
+    df = reader.load().where(where_condition)
+    # Write data
+    if metastore_table:
+        df.cache().write.saveAsTable(metastore_table, format=save_format, mode=save_mode)
+    if output_path:
+        df.cache().write.mode(save_mode).parquet(output_path)
 
+    if check_column is not None and last_value is not None:
+        new_last_value = df.agg({check_column: "max"}).collect()[0][0]
+        update_metadata_spark(connection_metastore=connection_metastore, 
+                              metastore_table_name=metastore_table_name, 
+                              last_value=new_last_value, 
+                              check_column=check_column, 
+                              dag_name=dag_name, 
+                              task_name=task_name)
+
+def update_metadata_spark(connection_metastore, metastore_table_name, last_value, check_column, dag_name, task_name):
+        
+        engine = create_engine(connection_metastore, echo=False, pool_pre_ping=True)
+        metadata = MetaData(engine)
+        metastore_table = Table(metastore_table_name, metadata, autoload=True)
+      
+        insert_query = insert(metastore_table).values(
+            job='%s.%s' % (dag_name, task_name), last_value=last_value,
+            update_datetime=datetime.datetime.now(), variable=check_column)
+        insert_query = insert_query.on_conflict_do_update(constraint=metastore_table.primary_key,
+                                                            set_=dict(insert_query.excluded))
+
+        conn = engine.connect()
+        try:
+            conn.execute(insert_query)
+        except:
+            raise AirflowException('Error in updating last value of Spark job.')
+        finally:
+            conn.close()
 
 def _parse_arguments(args: list[str] | None = None) -> Any:
     parser = argparse.ArgumentParser(description="Spark-JDBC")
@@ -142,6 +196,13 @@ def _parse_arguments(args: list[str] | None = None) -> Any:
     parser.add_argument("-lowerBound", dest="lower_bound", action="store")
     parser.add_argument("-upperBound", dest="upper_bound", action="store")
     parser.add_argument("-createTableColumnTypes", dest="create_table_column_types", action="store")
+    parser.add_argument("-connectionMetastore", dest="connection_metastore", action="store")
+    parser.add_argument("-dagName", dest="dag_name", action="store")
+    parser.add_argument("-taskName", dest="task_name", action="store")
+    parser.add_argument("-checkColumn", dest="check_column", action="store")
+    parser.add_argument("-lastValue", dest="last_value", action="store")
+    parser.add_argument("-outputPath", dest="output_path", action="store")
+    parser.add_argument("-metastoreTableName", dest="metastore_table_name", action="store")
     return parser.parse_args(args=args)
 
 
@@ -184,6 +245,13 @@ def _run_spark(arguments: Any) -> None:
             arguments.partition_column,
             arguments.lower_bound,
             arguments.upper_bound,
+            arguments.dag_name,
+            arguments.task_name,
+            arguments.check_column,
+            arguments.last_value,
+            arguments.output_path,
+            arguments.connection_metastore,
+            arguments.metastore_table_name
         )
 
 
