@@ -119,9 +119,10 @@ class SparkJDBCOperator(SparkSubmitOperator):
         overlap_value: str | None = None,
         overlap_format: str | None = None,
         output_path: str | None = None,
+        spark_binary: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(spark_binary=spark_binary, **kwargs)
         self._spark_app_name = spark_app_name
         self._spark_conn_id = spark_conn_id
         self._spark_conf = spark_conf
@@ -151,6 +152,7 @@ class SparkJDBCOperator(SparkSubmitOperator):
         self.overlap_value = overlap_value
         self.overlap_format = overlap_format
         self.output_path = output_path
+        self.last_value = None
 
     def execute(self, context: Context) -> None:
         """Call the SparkSubmitHook to run the provided spark job."""
@@ -166,19 +168,11 @@ class SparkJDBCOperator(SparkSubmitOperator):
             self.log.info('Gather last-value for %s.%s and column %s from SqoopMetastore' %
                           (context['dag'].dag_id, context['task_instance'].task_id,
                            self.check_column))
-            
-            # Not consider row with incremental column equals to Null
-            if self.query:
-                self.query = self.query + f" and \"{self.check_column}\" is not null"
-            elif self.where:
-                self.where = self.where + f" and \"{self.check_column}\" is not null"
-            else: 
-                self.where = f"{self.check_column} is not null"
 
-            self.last_value = self.__read_last_value(context)
+            self._hook.last_value = self.__read_last_value(context)
 
-            if self.last_value:
-                self.last_value = self.__manage_incremental_overlap(self.last_value)
+            if self._hook.last_value:
+                self._hook.last_value = self.__manage_incremental_overlap(self._hook.last_value)
         
         self._hook.submit_jdbc_job()
 
@@ -228,9 +222,9 @@ class SparkJDBCOperator(SparkSubmitOperator):
         )
 
     def __read_last_value(self, context):
-        session_maker = self.hook.get_session_maker()
+        session_maker = self._hook.get_session_maker()
         session = session_maker()
-        result = session.query(self.hook.get_metastore_table()) \
+        result = session.query(self._hook.get_metastore_table()) \
                         .filter_by(job='%s.%s' % (context['dag'].dag_id, context['task_instance'].task_id)) \
                         .filter_by(variable='%s' % self.check_column) \
                         .all()
