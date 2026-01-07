@@ -23,7 +23,6 @@ from typing import Any
 from pyspark.sql import SparkSession
 from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.dialects.postgresql import insert
-from airflow.exceptions import AirflowException
 import datetime
 
 SPARK_WRITE_TO_JDBC: str = "spark_to_jdbc"
@@ -172,7 +171,7 @@ def update_metadata_spark(connection_metastore, metastore_table_name, last_value
         try:
             conn.execute(insert_query)
         except:
-            raise AirflowException('Error in updating last value of Spark job.')
+            raise RuntimeError('Error in updating last value of Spark job.')
         finally:
             conn.close()
 
