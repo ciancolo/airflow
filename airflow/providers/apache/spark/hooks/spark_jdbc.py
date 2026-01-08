@@ -134,9 +134,10 @@ class SparkJDBCHook(SparkSubmitHook):
         task_name: str | None = None,
         last_value: str | None = None,
         output_path: str | None = None,
+        spark_binary: str | None = None,
         **kwargs: Any,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(spark_binary=spark_binary, *args, **kwargs)
         self._name = spark_app_name
         self._conn_id = spark_conn_id
         self._conf = spark_conf or {}
@@ -181,9 +182,10 @@ class SparkJDBCHook(SparkSubmitHook):
         self.dag_name = dag_name
         self.last_value = last_value
         self.output_path = output_path
+        
 
     def _resolve_jdbc_connection(self) -> dict[str, Any]:
-        conn_data = {"url": "", "schema": "", "conn_prefix": "", "user": "", "password": ""}
+        conn_data = {"url": "", "schema": "", "user": "", "password": ""}
         try:
             conn = self.get_connection(self._jdbc_conn_id)
             if "/" in conn.host:
@@ -198,23 +200,37 @@ class SparkJDBCHook(SparkSubmitHook):
             conn_data["user"] = conn.login
             conn_data["password"] = conn.password
             extra = conn.extra_dejson
-            conn_data["conn_prefix"] = extra.get("conn_prefix", "")
+            conn_data["database_type"] = extra.get("database_type", None)
+            conn_data['extra_params'] = extra.get('extraParams', None)
         except AirflowException:
             self.log.debug(
                 "Could not load jdbc connection string %s, defaulting to %s", self._jdbc_conn_id, ""
             )
         return conn_data
 
+    def _create_connection_string(self, jdbc_conn: dict[str, Any]) -> str:
+        if jdbc_conn["database_type"] is None:
+            raise ValueError("Database type should valorized")
+        
+        database_name = {jdbc_conn['schema']}
+        if jdbc_conn['database_type'] == 'sqlserver':
+            prefix = f"{jdbc_conn['database_type']}:"
+            database_name = f";databaseName={database_name};"
+        elif jdbc_conn['database_type'] == 'postgresql':
+            prefix = f"/{jdbc_conn['database_type']}:"
+        elif jdbc_conn['database_type'] == 'oracle':
+            prefix = f"/{jdbc_conn['database_type']}:thin:@"
+
+        return f"jdbc:{prefix}//{jdbc_conn['url']}{database_name}"
+
     def _build_jdbc_application_arguments(self, jdbc_conn: dict[str, Any]) -> Any:
         arguments = []
         arguments += ["-cmdType", self._cmd_type]
         if self._jdbc_connection["url"]:
-            if "?" in jdbc_conn["conn_prefix"]:
-                raise ValueError("The jdbc extra conn_prefix should not contain a '?'")
-            arguments += [
-                "-url",
-                f"{jdbc_conn['conn_prefix']}{jdbc_conn['url']}/{jdbc_conn['schema']}",
-            ]
+            url = self._create_connection_string(jdbc_conn=jdbc_conn)
+            if jdbc_conn['extra_params']:
+                url += f"{jdbc_conn['extra_params']}"
+            arguments += ["-url",url,]
         if self._jdbc_connection["user"]:
             arguments += ["-user", self._jdbc_connection["user"]]
         if self._jdbc_connection["password"]:
