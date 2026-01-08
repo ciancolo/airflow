@@ -122,7 +122,7 @@ class SparkJDBCOperator(SparkSubmitOperator):
         spark_binary: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(spark_binary=spark_binary, **kwargs)
+        super().__init__(**kwargs)
         self._spark_app_name = spark_app_name
         self._spark_conn_id = spark_conn_id
         self._spark_conf = spark_conf
@@ -153,6 +153,7 @@ class SparkJDBCOperator(SparkSubmitOperator):
         self.overlap_format = overlap_format
         self.output_path = output_path
         self.last_value = None
+        self._spark_binary=spark_binary
 
     def execute(self, context: Context) -> None:
         """Call the SparkSubmitHook to run the provided spark job."""
@@ -218,7 +219,8 @@ class SparkJDBCOperator(SparkSubmitOperator):
             dag_name = self.dag_name,
             task_name = self.task_name,
             last_value = self.last_value,
-            output_path = self.output_path
+            output_path = self.output_path,
+            spark_binary=self._spark_binary
         )
 
     def __read_last_value(self, context):
