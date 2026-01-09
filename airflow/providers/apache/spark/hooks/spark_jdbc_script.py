@@ -21,8 +21,9 @@ import argparse
 from typing import Any
 
 from pyspark.sql import SparkSession
-from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import sessionmaker
 import datetime
 
 SPARK_WRITE_TO_JDBC: str = "spark_to_jdbc"
@@ -32,10 +33,11 @@ SPARK_READ_FROM_JDBC: str = "jdbc_to_spark"
 def set_common_options(
     spark_source: Any,
     url: str = "localhost:5432",
-    jdbc_table: str = "default.default",
+    jdbc_table: str = None,
     user: str = "root",
     password: str = "root",
     driver: str = "driver",
+    query: str = None
 ) -> Any:
     """
     Get Spark source from JDBC connection.
@@ -47,10 +49,18 @@ def set_common_options(
     :param password: JDBC resource password
     :param driver: JDBC resource driver
     """
+    if jdbc_table:
+        type_import = 'dbtable'
+        name_import = jdbc_table
+    else:
+        type_import = 'query'
+        name_import = query
+        
+
     spark_source = (
         spark_source.format("jdbc")
         .option("url", url)
-        .option("dbtable", jdbc_table)
+        .option(type_import, name_import)
         .option("user", user)
         .option("password", password)
         .option("driver", driver)
@@ -111,11 +121,19 @@ def spark_read_from_jdbc(
     last_value: str,
     output_path: str,
     connection_metastore: str,
-    metastore_table_name: str
+    metastore_table_name: str,
+    query: str,
+    dest_connstring: str,
+    dest_table: str,
+    dest_driver: str,
+    dest_keys: str,
+    dest_writemode: str,
+    dest_username: str,
+    dest_password: str
 ) -> None:
     """Transfer data from JDBC source to Spark."""
     # first set common options
-    reader = set_common_options(spark_session.read, url, jdbc_table, user, password, driver)
+    reader = set_common_options(spark_session.read, url, jdbc_table, user, password, driver, query)
 
     if check_column is not None and last_value is not None:
         try:
@@ -140,13 +158,34 @@ def spark_read_from_jdbc(
 
     # Load data
     df = reader.load().where(where_condition)
+
     # Write data
     if metastore_table:
         df.cache().write.saveAsTable(metastore_table, format=save_format, mode=save_mode)
     if output_path:
         df.cache().write.mode(save_mode).parquet(output_path)
+    if dest_connstring and dest_table:
+        if dest_writemode == 'upsert':
+            write_table = dest_table + "_tmp"
+            writemode = 'overwrite'
+        else:
+            write_table = dest_table
+            writemode = dest_writemode
 
-    if check_column is not None and last_value is not None:
+        df.cache().write.format("jdbc").options(
+            url=dest_connstring,
+            dbtable=write_table,
+            user=dest_username,
+            password=dest_password,
+            driver=dest_driver
+        ).mode(writemode).save()
+
+        if dest_writemode == 'upsert':
+            perform_upsert(dataset=df, table_name=dest_table, 
+                            keys=dest_keys, url=dest_connstring, 
+                            username=dest_username, password=dest_password)
+
+    if check_column is not None:
         new_last_value = df.agg({check_column: "max"}).collect()[0][0]
         update_metadata_spark(connection_metastore=connection_metastore, 
                               metastore_table_name=metastore_table_name, 
@@ -154,6 +193,51 @@ def spark_read_from_jdbc(
                               check_column=check_column, 
                               dag_name=dag_name, 
                               task_name=task_name)
+
+def perform_upsert(dataset, table_name, keys, url, username, password):
+
+        # Convert keys in list in case it is a string
+        if not isinstance(keys, list):
+            keys = [keys]
+        
+        # Create connection string
+        host = url.split('://')[-1]
+        database_type = url.split('://')[0].split(':')[1]
+        connection_url = '%s://%s:%s@%s' % (database_type, username, password, host)
+
+        # Get session and connection
+        engine = create_engine(connection_url, echo=False, pool_pre_ping=True)
+        session_maker = sessionmaker(bind=engine)
+
+        session = session_maker()
+        connection = session.connection()
+        
+        # Upsert
+        other_cols = list(set(dataset.columns).difference(keys))
+        other_fields = ', '.join([f'{c} = EXCLUDED.{c}' for c in other_cols])
+
+        # Then merge
+        if len(other_fields) > 0:
+            upsert_query = f"""insert into public.{table_name} 
+                                select {",".join(dataset.columns)} from {table_name}_tmp
+                                on conflict({",".join(keys)})
+                                do update SET {other_fields}"""
+        else:
+            upsert_query = f"""INSERT INTO public.{table_name}
+                                select {",".join(dataset.columns)} from {table_name}_tmp
+                                ON CONFLICT ({",".join(keys)}) DO NOTHING
+                            """
+
+        connection.execute(text(upsert_query))
+
+        # Drop temporaney table
+        connection.execute(text(f"DROP TABLE {table_name}_tmp"))
+        
+        # Commit changes
+        try:
+            session.commit()
+        except:
+            session.rollout()
 
 def update_metadata_spark(connection_metastore, metastore_table_name, last_value, check_column, dag_name, task_name):
         
@@ -182,7 +266,7 @@ def _parse_arguments(args: list[str] | None = None) -> Any:
     parser.add_argument("-user", dest="user", action="store")
     parser.add_argument("-password", dest="password", action="store")
     parser.add_argument("-metastoreTable", dest="metastore_table", action="store", default=None)
-    parser.add_argument("-jdbcTable", dest="jdbc_table", action="store")
+    parser.add_argument("-jdbcTable", dest="jdbc_table", action="store", default=None)
     parser.add_argument("-jdbcDriver", dest="jdbc_driver", action="store")
     parser.add_argument("-jdbcTruncate", dest="truncate", action="store", default=None)
     parser.add_argument("-saveMode", dest="save_mode", action="store")
@@ -202,8 +286,15 @@ def _parse_arguments(args: list[str] | None = None) -> Any:
     parser.add_argument("-lastValue", dest="last_value", action="store", default=None)
     parser.add_argument("-outputPath", dest="output_path", action="store", default=None)
     parser.add_argument("-metastoreTableName", dest="metastore_table_name", action="store", default=None)
+    parser.add_argument("-query", dest="query", action="store", default=None)
+    parser.add_argument("-destinationConnectionString", dest="dest_connstring", action="store", default=None)
+    parser.add_argument("-destinationTable", dest="dest_table", action="store", default=None)
+    parser.add_argument("-destinationDriver", dest="dest_driver", action="store", default=None)
+    parser.add_argument("-destinationKeys", dest="dest_keys", action="store", default=None)
+    parser.add_argument("-destinationWriteMode", dest="dest_writemode", action="store", default=None)
+    parser.add_argument("-destinationUsername", dest="dest_username", action="store", default=None)
+    parser.add_argument("-destinationPassword", dest="dest_password", action="store", default=None)
     return parser.parse_args(args=args)
-
 
 def _create_spark_session(arguments: Any) -> SparkSession:
     return SparkSession.builder.appName(arguments.name).enableHiveSupport().getOrCreate()
@@ -250,7 +341,15 @@ def _run_spark(arguments: Any) -> None:
             arguments.last_value,
             arguments.output_path,
             arguments.connection_metastore,
-            arguments.metastore_table_name
+            arguments.metastore_table_name,
+            arguments.query,
+            arguments.dest_connstring,
+            arguments.dest_table,
+            arguments.dest_driver,
+            arguments.dest_keys,
+            arguments.dest_writemode,
+            arguments.dest_username,
+            arguments.dest_password
         )
 
 

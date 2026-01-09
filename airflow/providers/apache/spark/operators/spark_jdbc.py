@@ -17,7 +17,7 @@
 # under the License.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict
 
 from airflow.providers.apache.spark.hooks.spark_jdbc import SparkJDBCHook
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
@@ -120,6 +120,11 @@ class SparkJDBCOperator(SparkSubmitOperator):
         overlap_format: str | None = None,
         output_path: str | None = None,
         spark_binary: str | None = None,
+        query: str | None = None,
+        dest_conn_id: str | None = None,
+        dest_table: str | None = None,
+        dest_driver: str | None = 'org.postgresql.Driver',
+        dest_write_option: Dict | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -154,6 +159,11 @@ class SparkJDBCOperator(SparkSubmitOperator):
         self.output_path = output_path
         self.last_value = None
         self._spark_binary=spark_binary
+        self.query = query
+        self.dest_conn_id = dest_conn_id
+        self.dest_table = dest_table
+        self.dest_driver = dest_driver
+        self.dest_write_option = dest_write_option
 
     def execute(self, context: Context) -> None:
         """Call the SparkSubmitHook to run the provided spark job."""
@@ -220,7 +230,12 @@ class SparkJDBCOperator(SparkSubmitOperator):
             task_name = self.task_name,
             last_value = self.last_value,
             output_path = self.output_path,
-            spark_binary=self._spark_binary
+            spark_binary=self._spark_binary,
+            query=self.query,
+            dest_conn_id = self.dest_conn_id,
+            dest_table = self.dest_table,
+            dest_driver = self.dest_driver,
+            dest_write_option = self.dest_write_option
         )
 
     def __read_last_value(self, context):

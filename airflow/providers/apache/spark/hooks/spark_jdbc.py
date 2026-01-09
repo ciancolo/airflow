@@ -135,6 +135,11 @@ class SparkJDBCHook(SparkSubmitHook):
         last_value: str | None = None,
         output_path: str | None = None,
         spark_binary: str | None = None,
+        query: str | None = None,
+        dest_conn_id: str | None = None,
+        dest_table: str | None = None,
+        dest_driver: str | None = None,
+        dest_write_option: str | None = None,
         **kwargs: Any,
     ):
         super().__init__(spark_binary=spark_binary, *args, **kwargs)
@@ -170,6 +175,7 @@ class SparkJDBCHook(SparkSubmitHook):
         self._use_krb5ccache = use_krb5ccache
         self.metastore_table_name = metastore_table_name
         self.check_column = check_column
+        self.connection_url_metastore = None
         if conn_metastore_id:
             self.conn_metastore = self.get_connection(conn_metastore_id)
             self.connection_metastore_parameters = self.conn_metastore.extra_dejson
@@ -178,10 +184,20 @@ class SparkJDBCHook(SparkSubmitHook):
             self.metadata = MetaData(self.engine)
             self.session_maker = sessionmaker(bind=self.engine)
             self.metastore_table = Table(self.metastore_table_name, self.metadata, autoload=True)
+        self.dest_connection_string = None
+        if dest_conn_id:
+            self.dest_conn = self.get_connection(dest_conn_id)
+            self.dest_connection_string = 'jdbc:%s://%s:%s/%s' % (
+                        self.dest_conn.conn_type.replace('postgres', 'postgresql'),
+                        self.dest_conn.host, self.dest_conn.port, self.dest_conn.schema)
+        self.dest_table = dest_table
+        self.dest_driver = dest_driver
+        self.dest_write_option = dest_write_option
         self.task_name = task_name
         self.dag_name = dag_name
         self.last_value = last_value
         self.output_path = output_path
+        self.query = query
         
 
     def _resolve_jdbc_connection(self) -> dict[str, Any]:
@@ -212,15 +228,17 @@ class SparkJDBCHook(SparkSubmitHook):
         if jdbc_conn["database_type"] is None:
             raise ValueError("Database type should valorized")
         
-        database_name = {jdbc_conn['schema']}
+        database_name = jdbc_conn['schema']
         if jdbc_conn['database_type'] == 'sqlserver':
             prefix = f"{jdbc_conn['database_type']}:"
             database_name = f";databaseName={database_name};"
-        elif jdbc_conn['database_type'] == 'postgresql':
-            prefix = f"/{jdbc_conn['database_type']}:"
         elif jdbc_conn['database_type'] == 'oracle':
-            prefix = f"/{jdbc_conn['database_type']}:thin:@"
-
+            prefix = f"{jdbc_conn['database_type']}:thin:@"
+            database_name = f"/{database_name}"
+        elif jdbc_conn['database_type'] == 'databricks' or jdbc_conn['database_type'] == 'spark' or jdbc_conn['database_type'] == 'postgresql':
+            prefix = f"{jdbc_conn['database_type']}:"
+            database_name = f"/{database_name}"
+    
         return f"jdbc:{prefix}//{jdbc_conn['url']}{database_name}"
 
     def _build_jdbc_application_arguments(self, jdbc_conn: dict[str, Any]) -> Any:
@@ -230,7 +248,7 @@ class SparkJDBCHook(SparkSubmitHook):
             url = self._create_connection_string(jdbc_conn=jdbc_conn)
             if jdbc_conn['extra_params']:
                 url += f"{jdbc_conn['extra_params']}"
-            arguments += ["-url",url,]
+            arguments += ["-url", url]
         if self._jdbc_connection["user"]:
             arguments += ["-user", self._jdbc_connection["user"]]
         if self._jdbc_connection["password"]:
@@ -277,7 +295,23 @@ class SparkJDBCHook(SparkSubmitHook):
             arguments += ["-outputPath", self.output_path]
         if self.metastore_table_name:
             arguments += ["-metastoreTableName", self.metastore_table_name]
-
+        if self.query:
+            arguments += ["-query", self.query]
+        if self.dest_connection_string:
+            arguments += ["-destinationConnectionString", self.dest_connection_string]
+        if self.dest_conn.login:
+            arguments += ["-destinationUsername", self.dest_conn.login]
+        if self.dest_conn.password:
+            arguments += ["-destinationPassword", self.dest_conn.password]
+        if self.dest_table:
+            arguments += ["-destinationTable", self.dest_table]
+        if self.dest_driver:
+            arguments += ["-destinationDriver", self.dest_driver]
+        if self.dest_write_option:
+            if 'keys' in self.dest_write_option.keys():
+                arguments += ["-destinationKeys", self.dest_write_option['keys']]
+            if 'write_mode' in self.dest_write_option.keys():
+                arguments += ["-destinationWriteMode", self.dest_write_option['write_mode']]
         return arguments
 
     def submit_jdbc_job(self) -> None:
