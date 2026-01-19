@@ -165,9 +165,14 @@ def spark_read_from_jdbc(
     if output_path:
         df.cache().write.mode(save_mode).parquet(output_path)
     if dest_connstring and dest_table:
+        truncate = 'false'
         if dest_writemode == 'upsert':
             write_table = dest_table + "_tmp"
             writemode = 'overwrite'
+        elif dest_writemode == 'truncate':
+            write_table = dest_table
+            writemode = 'overwrite'
+            truncate = 'true'
         else:
             write_table = dest_table
             writemode = dest_writemode
@@ -177,7 +182,8 @@ def spark_read_from_jdbc(
             dbtable=write_table,
             user=dest_username,
             password=dest_password,
-            driver=dest_driver
+            driver=dest_driver,
+            truncate=truncate
         ).mode(writemode).save()
 
         if dest_writemode == 'upsert':
