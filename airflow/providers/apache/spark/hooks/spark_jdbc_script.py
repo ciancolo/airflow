@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, functions as f
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
@@ -176,6 +176,9 @@ def spark_read_from_jdbc(
         else:
             write_table = dest_table
             writemode = dest_writemode
+
+        # Add column with import timestamp
+        df = df.withColumn('spark_import_timestamp', f.current_timestamp())
 
         df.cache().write.format("jdbc").options(
             url=dest_connstring,
