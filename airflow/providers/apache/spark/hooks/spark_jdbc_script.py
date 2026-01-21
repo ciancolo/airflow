@@ -266,6 +266,13 @@ def perform_upsert(dataset, table_name, keys, url, username, password):
 
         session = session_maker()
         connection = session.connection()
+
+        # Create table if not exits
+        creation_query = f"""CREATE TABLE IF NOT EXISTS {table_name} AS
+                                SELECT *
+                                FROM {table_name}_tmp;"""
+
+        connection.execute(text(creation_query))
         
         # Upsert
         other_cols = list(set(dataset.columns).difference(keys))
