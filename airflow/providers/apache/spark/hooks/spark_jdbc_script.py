@@ -165,17 +165,10 @@ def spark_read_from_jdbc(
     if output_path:
         df.cache().write.mode(save_mode).parquet(output_path)
     if dest_connstring and dest_table:
-        truncate = 'false'
-        if dest_writemode == 'upsert':
-            write_table = dest_table + "_tmp"
-            writemode = 'overwrite'
-        elif dest_writemode == 'truncate':
-            write_table = dest_table
-            writemode = 'overwrite'
-            truncate = 'true'
-        else:
-            write_table = dest_table
-            writemode = dest_writemode
+        write_table = dest_table + "_tmp"
+
+        if dest_writemode not in ['upsert', "overwrite", 'append', 'truncate']:
+            raise ValueError(f"dest_writemode {dest_writemode} not valid")
 
         # Add column with import timestamp
         df = df.withColumn('spark_import_timestamp', f.current_timestamp())
@@ -185,14 +178,19 @@ def spark_read_from_jdbc(
             dbtable=write_table,
             user=dest_username,
             password=dest_password,
-            driver=dest_driver,
-            truncate=truncate
-        ).mode(writemode).save()
+            driver=dest_driver
+        ).mode('overwrite').save()
 
         if dest_writemode == 'upsert':
             perform_upsert(dataset=df, table_name=dest_table, 
                             keys=dest_keys, url=dest_connstring, 
                             username=dest_username, password=dest_password)
+        else:
+            perform_insert(dataset=df, table_name=dest_table, 
+                            url=dest_connstring, 
+                            username=dest_username, password=dest_password,
+                            write_mode=dest_writemode)
+
 
     if check_column is not None:
         new_last_value = df.agg({check_column: "max"}).collect()[0][0]
@@ -202,6 +200,54 @@ def spark_read_from_jdbc(
                               check_column=check_column, 
                               dag_name=dag_name, 
                               task_name=task_name)
+
+def perform_insert(dataset, table_name, url, username, password, write_mode):
+
+        # Create connection string
+        host = url.split('://')[-1]
+        database_type = url.split('://')[0].split(':')[1]
+        connection_url = '%s://%s:%s@%s' % (database_type, username, password, host)
+
+        # Get session and connection
+        engine = create_engine(connection_url, echo=False, pool_pre_ping=True)
+        session_maker = sessionmaker(bind=engine)
+
+        session = session_maker()
+        connection = session.connection()
+
+        if write_mode == 'overwrite':
+            drop_query = f"drop table IF EXISTS {table_name}"
+            connection.execute(text(drop_query))
+
+            insert_query = f"""CREATE TABLE {table_name} AS
+                                SELECT *
+                                FROM {table_name}_tmp;"""
+        else:
+            if write_mode == 'truncate':
+                truncate_query = f"""DO $$
+                            BEGIN
+                                IF to_regclass('{table_name}') IS NOT NULL THEN
+                                    TRUNCATE TABLE {table_name};
+                                ELSE
+                                    CREATE TABLE {table_name} AS
+                                        SELECT *
+                                        FROM {table_name}_tmp;
+                                END IF;
+                            END $$;"""
+                connection.execute(text(truncate_query))
+            columns = '","'.join(dataset.columns)
+            insert_query = f'insert into {table_name} select "{columns}" from {table_name}_tmp'
+
+        connection.execute(text(insert_query))
+
+        # Drop temporaney table
+        connection.execute(text(f"DROP TABLE IF EXISTS {table_name}_tmp"))
+        
+        # Commit changes
+        try:
+            session.commit()
+        except:
+            session.rollback()
 
 def perform_upsert(dataset, table_name, keys, url, username, password):
 
@@ -226,15 +272,17 @@ def perform_upsert(dataset, table_name, keys, url, username, password):
         other_fields = ', '.join([f'{c} = EXCLUDED.{c}' for c in other_cols])
 
         # Then merge
+        columns = '","'.join(dataset.columns)
+        keys =  '","'.join(keys)
         if len(other_fields) > 0:
-            upsert_query = f"""insert into public.{table_name} 
-                                select {",".join(dataset.columns)} from {table_name}_tmp
-                                on conflict({",".join(keys)})
+            upsert_query = f"""insert into {table_name} 
+                                select "{columns}" from {table_name}_tmp
+                                on conflict("{keys}")
                                 do update SET {other_fields}"""
         else:
-            upsert_query = f"""INSERT INTO public.{table_name}
-                                select {",".join(dataset.columns)} from {table_name}_tmp
-                                ON CONFLICT ({",".join(keys)}) DO NOTHING
+            upsert_query = f"""INSERT INTO {table_name}
+                                select "{columns}" from {table_name}_tmp
+                                ON CONFLICT ("{keys}") DO NOTHING
                             """
 
         connection.execute(text(upsert_query))
@@ -246,7 +294,7 @@ def perform_upsert(dataset, table_name, keys, url, username, password):
         try:
             session.commit()
         except:
-            session.rollout()
+            session.rollback()
 
 def update_metadata_spark(connection_metastore, metastore_table_name, last_value, check_column, dag_name, task_name):
         
