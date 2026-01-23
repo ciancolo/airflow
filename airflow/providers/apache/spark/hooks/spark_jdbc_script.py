@@ -249,7 +249,26 @@ def perform_insert(dataset, table_name, url, username, password, write_mode):
         except:
             session.rollback()
 
+def parse_table_name(table_name: str, default_schema="public"):
+    parts = table_name.split(".")
+
+    if len(parts) == 1:
+        schema = default_schema
+        table = parts[0]
+    elif len(parts) == 2:
+        schema, table = parts
+    else:
+        raise ValueError(f"Nome tabella non valido: {table_name}")
+
+    return schema, table
+
+
 def perform_upsert(dataset, table_name, keys, url, username, password):
+        
+        schema, table = parse_table_name(table_name)
+
+        full_table = f'"{schema}"."{table}"'
+        tmp_table = f'"{schema}"."{table}_tmp"'
 
         # Convert keys in list in case it is a string
         if not isinstance(keys, list):
@@ -267,35 +286,63 @@ def perform_upsert(dataset, table_name, keys, url, username, password):
         session = session_maker()
         connection = session.connection()
 
-        # Create table if not exits
-        creation_query = f"""CREATE TABLE IF NOT EXISTS {table_name} AS
-                                SELECT *
-                                FROM {table_name}_tmp;"""
+        # Check if the table exists
+        check_table_query = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = :schema
+                AND table_name = :table
+            );
+            """
 
-        connection.execute(text(creation_query))
-        
-        # Upsert
-        other_cols = list(set(dataset.columns).difference(keys))
-        other_fields = ', '.join([f'{c} = EXCLUDED.{c}' for c in other_cols])
+        table_exists = connection.execute(
+            text(check_table_query),
+            {"schema": schema, "table": table}
+        ).scalar()
 
-        # Then merge
-        columns = '","'.join(dataset.columns)
-        keys =  '","'.join(keys)
-        if len(other_fields) > 0:
-            upsert_query = f"""insert into {table_name} 
-                                select "{columns}" from {table_name}_tmp
-                                on conflict("{keys}")
-                                do update SET {other_fields}"""
+        if not table_exists:
+            # Create table if not exits
+            creation_query = f"""CREATE TABLE IF NOT EXISTS {full_table} AS
+                                    SELECT *
+                                    FROM {tmp_table};"""
+
+            connection.execute(text(creation_query))
+            
+            # Crea constraint UNIQUE
+            constraint_name = f"{table}_uniq"
+            keys_sql = ", ".join([f'"{k}"' for k in keys])
+
+            constraint_query = f"""
+                ALTER TABLE {full_table}
+                ADD CONSTRAINT "{constraint_name}"
+                UNIQUE ({keys_sql});
+            """
+            connection.execute(text(constraint_query))
         else:
-            upsert_query = f"""INSERT INTO {table_name}
-                                select "{columns}" from {table_name}_tmp
-                                ON CONFLICT ("{keys}") DO NOTHING
-                            """
+            # Upsert
+            other_cols = list(set(dataset.columns).difference(keys))
+            other_fields = ', '.join([f'"{c}" = EXCLUDED."{c}"' for c in other_cols])
 
-        connection.execute(text(upsert_query))
+            # Then merge
+            columns = '","'.join(dataset.columns)
+            keys =  '","'.join(keys)
+
+            if len(other_fields) > 0:
+                upsert_query = f"""insert into {full_table} 
+                                    select "{columns}" from {tmp_table}
+                                    on conflict("{table}_uniq")
+                                    do update SET {other_fields}"""
+            else:
+                upsert_query = f"""INSERT INTO {full_table}
+                                    select "{columns}" from {tmp_table}
+                                    ON CONFLICT ("{table}_uniq") DO NOTHING
+                                """
+
+            connection.execute(text(upsert_query))
 
         # Drop temporaney table
-        connection.execute(text(f"DROP TABLE {table_name}_tmp"))
+        connection.execute(text(f"DROP TABLE {tmp_table}"))
         
         # Commit changes
         try:
